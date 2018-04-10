@@ -9,6 +9,7 @@ import (
 	"net/url"
 
 	"github.com/sensu/uchiwa/uchiwa/logger"
+	"io/ioutil"
 )
 
 // ...
@@ -65,20 +66,29 @@ func (api *API) doRequest(req *http.Request) ([]byte, *http.Response, error) {
 		return nil, nil, fmt.Errorf("%v", res.Status)
 	}
 
+	var body []byte
 	if res.ContentLength < 0 {
-		return nil, nil, fmt.Errorf("unknown content length of %d", res.ContentLength)
-	}
-
-	body := make([]byte, res.ContentLength)
-	n, err := io.ReadFull(res.Body, body)
-	if err != nil {
-		if err == io.ErrUnexpectedEOF {
-			logger.Warningf("Tried to read %d bytes, got %d", res.ContentLength, n)
+		// manage situations where the Content-Length is not present because the
+		// package has been chuncked or compressed by proxies between Uchiwa and the Sensu API
+		body, err = ioutil.ReadAll(res.Body)
+		if err != nil {
 			if api.Tracing {
-				logger.Infof("Got %s", string(body[0:n]))
+				logger.Infof("Got %s", string(body))
 			}
+			return nil, nil, fmt.Errorf("error reading body when Content-Length is %d: %s", res.ContentLength, err)
 		}
-		return nil, nil, fmt.Errorf("Parsing response body returned: %v", err)
+	} else {
+		body = make([]byte, res.ContentLength)
+		n, err := io.ReadFull(res.Body, body)
+		if err != nil {
+			if err == io.ErrUnexpectedEOF {
+				logger.Warningf("Tried to read %d bytes, got %d", res.ContentLength, n)
+				if api.Tracing {
+					logger.Infof("Got %s", string(body[0:n]))
+				}
+			}
+			return nil, nil, fmt.Errorf("Parsing response body returned: %v", err)
+		}
 	}
 
 	if api.Tracing {
